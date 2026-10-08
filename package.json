@@ -1,0 +1,30 @@
+{
+  "name": "agent-job-pipeline",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "verify:imports": "tsx scripts/verify-runtime-imports.ts",
+    "guides:check": "tsx scripts/verify-guides.ts",
+    "verify": "npm test && npm run test:integration && npm run typecheck && npm run verify:imports",
+    "privacy:check": "tsx scripts/privacy-scan.ts",
+    "package:release": "tsx scripts/package-release.ts",
+    "release:verify": "tsx scripts/verify-release.ts",
+    "release": "tsx scripts/release.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260919.1",
+    "@types/node": "22.20.4",
+    "miniflare": "5.20260918.0-alpha",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.135.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0"
+  },
+  "version": "0.1.0-beta.1"
+}

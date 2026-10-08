@@ -1,0 +1,39 @@
+name = {{NAME}}
+main = {{ENTRY}}
+account_id = {{ACCOUNT}}
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+[triggers]
+crons = {{CRONS}}
+[vars]
+LIFECYCLE_MODE = {{LIFECYCLEMODE}}
+MANUAL_INTAKE_MODE = "durable"
+CANDIDATE_CONFIG = {{CANDIDATE}}
+INSTANCE_CONFIG = {{INSTANCE}}
+DISCOVERY_ACCOUNTING_MODE = "on"
+DISCOVERY_QUERY_MODE = "baseline"
+DISCOVERY_QUEUE_MODE = "off"
+DISCOVERY_EMPLOYER_MODE = "off"
+[ai]
+binding = "AI"
+[[d1_databases]]
+binding = "DB"
+database_name = {{DBNAME}}
+database_id = {{DBID}}
+[[workflows]]
+binding = "AGENT_WORKFLOW"
+name = {{WORKFLOW}}
+class_name = "UnboundedAgentWorkflow"
+
+[[workflows]]
+binding = "LIFECYCLE_WORKFLOW"
+name = {{LIFECYCLE}}
+class_name = "LifecycleWorkflow"
+[[workflows]]
+binding = "MANUAL_INTAKE_WORKFLOW"
+name = {{INTAKE}}
+class_name = "ManualIntakeWorkflow"
+[[workflows]]
+binding = "RADAR_WORKFLOW"
+name = {{RADAR}}
+class_name = "RadarWorkflow"

@@ -1,0 +1,1 @@
+export function bootstrap(workspace: string, run?: (command: string, args: string[], options: {cwd: string; env: NodeJS.ProcessEnv; maxBuffer: number}) => Promise<unknown>): Promise<{ok: true; loader: string}>;

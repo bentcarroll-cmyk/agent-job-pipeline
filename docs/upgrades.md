@@ -1,0 +1,11 @@
+# Upgrade a reviewed instance
+
+Select and inspect the intended release revision before changing a working instance. Preserve the external private workspace, exact resource intents/IDs, ownership marker, candidate and readable approvals, migration receipts, activation review, ledger and local application packages. Do not import another operator's resources or career data.
+
+Run the [setup capability check and status](../SETUP.md) using the same explicit workspace/instance and Node 22/Python 3.12. A changed dependency lock requires reinstalling/reverifying that workspace's private dependencies through `check`; do not change global settings. Source files and private configuration have independent schema versions. Unsupported versions stop; reconcile them explicitly, rather than guessing or downgrading.
+
+`resources` resumes the saved resource plan and verifies exact account-scoped identity. Fresh databases use the complete root schema and represented migration receipts. Existing databases require verified setup ownership and historical hash provenance; only missing represented migrations apply, with DDL and receipt committed transactionally. Changed historical hashes, foreign/missing/replaced resources or uncertain creation stop for investigation. Never delete migration receipts or intents to make an upgrade pass.
+
+Changes to policy, search banks or decision-affecting identity require fresh candidate/readable approval. Changes to instance schedule, channels or flags require fresh exact instance review. Rerun offline `preview`; stale fingerprints stop activation. Follow [reviewed activation](../SETUP.md) with external quiescence, receipt reconciliation and current independent D1 active revision. Operational config emission is not deployment. Explicitly review/deploy the selected generated configs and repeat real provider/callback/account acceptance under separate authorization before resuming live schedules.
+
+Keep started run snapshots pinned to their admitted criteria and keep existing stable job IDs and versioned material folders. An upgrade does not justify new application timestamps or an inferred submission. If a stage is blocked, preserve its artifacts and use [recovery](recovery.md).

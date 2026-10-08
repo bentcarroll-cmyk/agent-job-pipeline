@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "identity": {
+    "displayName": "Morgan Example",
+    "countryCode": "US",
+    "subdivisionCode": "US-MA"
+  },
+  "policy": {
+    "employmentTypes": [
+      "full-time"
+    ],
+    "clearance": "review",
+    "compensation": {
+      "minimumBase": 160000,
+      "currency": "USD",
+      "period": "year"
+    },
+    "location": {
+      "countryCode": "US",
+      "subdivisionCode": "US-MA",
+      "commuteLocations": [
+        "Boston, MA"
+      ],
+      "allowRemote": true,
+      "allowOnsite": true,
+      "allowHybrid": true
+    },
+    "functionLanes": [
+      {
+        "id": "A",
+        "description": "Software engineering",
+        "companyCategories": [
+          "applied AI"
+        ]
+      }
+    ]
+  },
+  "search": {
+    "baselinePhrases": [
+      "Software engineering"
+    ],
+    "functionPhrases": [
+      "Software engineering manager"
+    ],
+    "openWebPhrases": [
+      "Software engineering careers"
+    ],
+    "sources": [
+      {
+        "company": "Example Automation",
+        "companyCategory": "applied AI",
+        "ats": "greenhouse",
+        "slug": "example-automation"
+      }
+    ],
+    "unresolvedEmployers": [],
+    "registry": []
+  },
+  "approval": {
+    "readableSha256": "fee0ce6ce15316e9ff7a4dad690488f57c03b8efd1767f9f5f686315c40a85a2",
+    "policySha256": "8ea12e6d92b48d0291950cf8e0144054165b3a1333cb484e08ac88081be72341",
+    "configSha256": "b62f625205395fbb19dec5eef924b87560852185f86a41608478f8e19b6ef8da",
+    "approvedAt": "2026-01-02T12:00:00Z"
+  }
+}

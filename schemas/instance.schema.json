@@ -1,0 +1,249 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "instanceId",
+    "operator",
+    "cloudflare",
+    "slack",
+    "lifecycle",
+    "schedule",
+    "screeningMode",
+    "manualScreeningMode",
+    "shadowMode",
+    "radar"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "instanceId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "displayName",
+        "contactEmail"
+      ],
+      "properties": {
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+        },
+        "contactEmail": {
+          "type": "string",
+          "format": "email"
+        }
+      }
+    },
+    "cloudflare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accountId",
+        "databaseName",
+        "databaseId",
+        "fixedWorkerName",
+        "unboundedWorkerName",
+        "gatewayId"
+      ],
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{32}$"
+        },
+        "databaseName": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "databaseId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fixedWorkerName": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "unboundedWorkerName": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "gatewayId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        }
+      }
+    },
+    "slack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "channelId",
+        "allowedUserId"
+      ],
+      "properties": {
+        "channelId": {
+          "type": "string",
+          "pattern": "^[CG][A-Z0-9]+$"
+        },
+        "allowedUserId": {
+          "type": "string",
+          "pattern": "^[UW][A-Z0-9]+$"
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "since",
+        "oauthMode"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "since": {
+          "type": "string",
+          "format": "date"
+        },
+        "oauthMode": {
+          "enum": [
+            "testing",
+            "personal",
+            "verified"
+          ]
+        }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timezone",
+        "discoveryLocalTimes",
+        "discoveryWeekdays",
+        "lifecycleLocalTime",
+        "radarLocalTime"
+      ],
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "format": "iana-timezone"
+        },
+        "discoveryLocalTimes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][05]$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "discoveryWeekdays": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 7
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "lifecycleLocalTime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][05]$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "radarLocalTime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][05]$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "screeningMode": {
+      "enum": [
+        "legacy",
+        "evidence"
+      ]
+    },
+    "manualScreeningMode": {
+      "enum": [
+        "legacy",
+        "evidence"
+      ]
+    },
+    "shadowMode": {
+      "type": "boolean"
+    },
+    "radar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "channelId",
+        "monthlyBudgetUsd",
+        "topics"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "channelId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[CG][A-Z0-9]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "monthlyBudgetUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^\\S(?:[\\s\\S]*\\S)?$"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/instance.schema.json",
+  "description": "Instance draft structure. Operational parsing also requires a non-null databaseId. Runtime checks valid timezone/date values, distinct workers and enabled-feature scheduling. Local times require five-minute granularity."
+}

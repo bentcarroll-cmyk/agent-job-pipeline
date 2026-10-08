@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "identity": {
+    "displayName": "Alex Example",
+    "countryCode": "US",
+    "subdivisionCode": "US-IL"
+  },
+  "policy": {
+    "employmentTypes": [
+      "full-time"
+    ],
+    "clearance": "review",
+    "compensation": {
+      "minimumBase": 100000,
+      "currency": "USD",
+      "period": "year"
+    },
+    "location": {
+      "countryCode": "US",
+      "subdivisionCode": "US-IL",
+      "commuteLocations": [
+        "Chicago, IL"
+      ],
+      "allowRemote": true,
+      "allowOnsite": true,
+      "allowHybrid": true
+    },
+    "functionLanes": [
+      {
+        "id": "A",
+        "description": "Operations",
+        "companyCategories": [
+          "applied AI"
+        ]
+      }
+    ]
+  },
+  "search": {
+    "baselinePhrases": [
+      "Operations"
+    ],
+    "functionPhrases": [
+      "Operations manager"
+    ],
+    "openWebPhrases": [
+      "Operations careers"
+    ],
+    "sources": [
+      {
+        "company": "Example Automation",
+        "companyCategory": "applied AI",
+        "ats": "greenhouse",
+        "slug": "example-automation"
+      }
+    ],
+    "unresolvedEmployers": [],
+    "registry": []
+  },
+  "approval": {
+    "readableSha256": "4e36c82b7c92f948c4707a26c5cc993957b50a9be67b50fdf1583d77529779ec",
+    "policySha256": "f16d0dbd6c6d2e2f0119756fde9a5716b327f39a1e20f598a1ccb76df5452d76",
+    "configSha256": "d5c13c7f8c8abbc3dc82f607241ac34aa14b2b0b5f4fb212944fa8e72406f7e6",
+    "approvedAt": "2026-01-02T12:00:00Z"
+  }
+}

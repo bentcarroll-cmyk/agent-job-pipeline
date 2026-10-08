@@ -1,0 +1,17 @@
+# Measured macOS arm64 / Python 3.12.14, October 2026.
+# Fully pinned dependency closure; package hashes are not enforced.
+cffi==2.1.1
+chardet==7.6.0
+charset-normalizer==3.5.2
+cryptography==50.0.2
+iniconfig==2.3.1
+packaging==26.3
+pdfminer.six==20231228
+pdfplumber==0.11.4
+pillow==12.3.0
+pluggy==1.6.0
+pycparser==3.0
+pypdf==5.1.0
+pypdfium2==5.14.0
+pytest==8.3.4
+reportlab==4.2.5

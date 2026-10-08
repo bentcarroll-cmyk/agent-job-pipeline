@@ -1,0 +1,40 @@
+name: Verify synthetic release
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  macos-local-runtime:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install declared dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          python -m venv tools/materials/.venv
+          tools/materials/.venv/bin/python -m pip install -r tools/materials/requirements-macos-py312.lock
+          tools/materials/.venv/bin/python -m pip check
+      - name: Offline synthetic Node and D1 checks
+        run: npm run verify
+      - name: Python material checks on macOS Arial
+        run: tools/materials/.venv/bin/python -m pytest tests/materials -q
+      - name: Guides and full public tree/history privacy
+        run: |
+          npm run guides:check
+          npm run privacy:check -- --history
+      - name: Reproducible candidate archive
+        run: |
+          npm run package:release -- . /tmp/release-a
+          npm run package:release -- . /tmp/release-b
+          cmp /tmp/release-a/agent-job-pipeline.tar.gz /tmp/release-b/agent-job-pipeline.tar.gz
+          npm run release:verify -- /tmp/release-a/agent-job-pipeline.tar.gz

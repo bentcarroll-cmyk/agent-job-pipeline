@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "identity": {
+    "displayName": "Jamie Example",
+    "countryCode": "GB",
+    "subdivisionCode": "GB-ENG"
+  },
+  "policy": {
+    "employmentTypes": [
+      "full-time"
+    ],
+    "clearance": "review",
+    "compensation": {
+      "minimumBase": null,
+      "currency": "GBP",
+      "period": "year"
+    },
+    "location": {
+      "countryCode": "GB",
+      "subdivisionCode": "GB-ENG",
+      "commuteLocations": [
+        "Manchester"
+      ],
+      "allowRemote": true,
+      "allowOnsite": true,
+      "allowHybrid": true
+    },
+    "functionLanes": [
+      {
+        "id": "A",
+        "description": "Service design",
+        "companyCategories": [
+          "applied AI"
+        ]
+      }
+    ]
+  },
+  "search": {
+    "baselinePhrases": [
+      "Service design"
+    ],
+    "functionPhrases": [
+      "Service design manager"
+    ],
+    "openWebPhrases": [
+      "Service design careers"
+    ],
+    "sources": [
+      {
+        "company": "Example Automation",
+        "companyCategory": "applied AI",
+        "ats": "greenhouse",
+        "slug": "example-automation"
+      }
+    ],
+    "unresolvedEmployers": [],
+    "registry": []
+  },
+  "approval": {
+    "readableSha256": "48a865b1fd02f848f302a0ba2553ec3682ea60b04376900ccc5c7da1601769d7",
+    "policySha256": "25f542e0086b03de9b771b5fe24a3d8ed996a847a4b5e5dc0fed14b4c958af67",
+    "configSha256": "09457fb219560e8d4cd6c3eb6c0e3e224e9a602ea24ba96f8d85be6cbaa774db",
+    "approvedAt": "2026-01-02T12:00:00Z"
+  }
+}

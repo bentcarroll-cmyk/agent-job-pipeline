@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "instanceId": "example-instance",
+  "operator": {
+    "displayName": "Example Operator",
+    "contactEmail": "operator@example.com"
+  },
+  "cloudflare": {
+    "accountId": "00000000000000000000000000000000",
+    "databaseName": "example-ledger",
+    "databaseId": "00000000-0000-4000-8000-000000000000",
+    "fixedWorkerName": "example-fixed",
+    "unboundedWorkerName": "example-unbounded",
+    "gatewayId": "example-gateway"
+  },
+  "slack": {
+    "channelId": "CEXAMPLE123",
+    "allowedUserId": "UEXAMPLE123"
+  },
+  "lifecycle": {
+    "enabled": false,
+    "since": "2026-01-01",
+    "oauthMode": "testing"
+  },
+  "schedule": {
+    "timezone": "America/Chicago",
+    "discoveryLocalTimes": [
+      "09:00"
+    ],
+    "discoveryWeekdays": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "lifecycleLocalTime": null,
+    "radarLocalTime": null
+  },
+  "screeningMode": "legacy",
+  "manualScreeningMode": "legacy",
+  "shadowMode": false,
+  "radar": {
+    "enabled": false,
+    "channelId": null,
+    "monthlyBudgetUsd": 0,
+    "topics": []
+  }
+}
