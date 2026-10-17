@@ -17,3 +17,10 @@ it.each([[
   }) as typeof readFile;
   await expect(verifyGuides(root,read)).rejects.toThrow(error);
 });
+it.each([["0.1.0", "GUIDE_RELEASE_VERSION_MISMATCH"], ["0.1.0-beta.0", "GUIDE_RELEASE_VERSION_MISMATCH"], ["0.1.0-beta.9", "GUIDE_RELEASE_PROMPT_MISMATCH"]])("guide checker binds the setup prompt to a beta package version: %s", async (version, error) => {
+  const read = (async (path: Parameters<typeof readFile>[0], options: any) => {
+    const body = (await readFile(path, options)).toString();
+    return String(path).endsWith("/package.json") ? JSON.stringify({ ...JSON.parse(body), version }) : body;
+  }) as typeof readFile;
+  await expect(verifyGuides(root, read)).rejects.toThrow(error);
+});

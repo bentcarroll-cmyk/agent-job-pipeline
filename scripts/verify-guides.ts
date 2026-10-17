@@ -31,7 +31,8 @@ export async function verifyGuides(base = root, read: typeof readFile = readFile
   }
   for (const command of commands) if (!seen.has(command)) throw new Error(`GUIDE_COMMAND_UNDOCUMENTED: ${command}`);
   const version = JSON.parse(await read(resolve(base, "package.json"), "utf8")).version;
-  if (version !== "0.1.0-beta.1") throw new Error("GUIDE_RELEASE_VERSION_MISMATCH");
+  // The setup prompt names a prerelease, so the package must be a beta.
+  if (!/^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})-beta\.[1-9]\d{0,5}$/.test(version)) throw new Error("GUIDE_RELEASE_VERSION_MISMATCH");
   const prompt = `> Set up Agent Job Pipeline from https://github.com/bentcarroll-cmyk/agent-job-pipeline at the reviewed v${version} prerelease.`;
   for (const file of ["README.md", "SETUP.md", "docs/release-notes.md"]) {
     const body = await read(resolve(base, file), "utf8");

@@ -16,10 +16,12 @@ type Check = {
     evidenceSha256: string | null;
 };
 export type Candidate = {
-    schemaVersion: 1;
+    schemaVersion: 2;
     channel: 'stable' | 'beta';
-    version: 'v0.1.0' | 'v0.1.0-beta.1';
+    version: string;
     repository: 'bentcarroll-cmyk/agent-job-pipeline';
+    // The published release this one follows; null for the first release.
+    previousRelease: { version: string; sha: string } | null;
     candidateSha: string;
     rootSha: string;
     lineageSha256: string;
@@ -37,7 +39,7 @@ export type Candidate = {
 };
 const git = (root: string, ...args: string[]) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
 function fail(code: string): never { throw new Error(code); }
-const hex = (value: unknown, length: number) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
+const hex = (value: unknown, length: number): value is string => typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
 function validateChecks(checks: unknown, sha: string): asserts checks is Check[] {
     if (!Array.isArray(checks) || checks.length !== REQUIRED_CHECKS.length || new Set(checks.map(c => c?.name)).size !== REQUIRED_CHECKS.length)
         fail('CHECK_EVIDENCE_INVALID');
@@ -47,11 +49,46 @@ function validateChecks(checks: unknown, sha: string): asserts checks is Check[]
             fail('CHECK_EVIDENCE_INVALID');
     }
 }
-const RELEASE_VERSIONS = { stable: 'v0.1.0', beta: 'v0.1.0-beta.1' } as const;
 const BETA_REQUIRED_CHECKS: readonly CheckName[] = ['local-verification', 'materials-and-visual-review', 'hosted-ci'];
-function releaseVersion(channel: unknown): Candidate['version'] {
+// vMAJOR.MINOR.PATCH for stable, with -beta.N for beta.
+const VERSION = /^v(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-beta\.([1-9]\d{0,5}))?$/;
+const versionKey = (version: string) => {
+    const m = VERSION.exec(version) ?? fail('RELEASE_VERSION_INVALID');
+    return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? Infinity : Number(m[4])];
+};
+const channelOf = (version: string): Candidate['channel'] => (versionKey(version)[3] === Infinity ? 'stable' : 'beta');
+// A beta sorts before the stable release of the same number.
+function newer(version: string, than: string): boolean {
+    const a = versionKey(version), b = versionKey(than);
+    const i = a.findIndex((n, j) => n !== b[j]);
+    return i >= 0 && a[i] > b[i];
+}
+// The channel is chosen deliberately and must agree with the committed package version.
+function releaseVersion(root: string, channel: unknown): string {
     if (channel !== 'stable' && channel !== 'beta') fail('RELEASE_CHANNEL_INVALID');
-    return RELEASE_VERSIONS[channel];
+    let value: unknown;
+    try { value = JSON.parse(git(root, 'show', 'HEAD:package.json')).version; }
+    catch { fail('RELEASE_CHANNEL_VERSION_MISMATCH'); }
+    const version = `v${value}`;
+    if (typeof value !== 'string' || !VERSION.test(version) || channelOf(version) !== channel) fail('RELEASE_CHANNEL_VERSION_MISMATCH');
+    return version;
+}
+const isAncestor = (root: string, sha: string, of: string) => {
+    try { execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', sha, of], { stdio: 'ignore' }); return true; }
+    catch { return false; }
+};
+// A release that follows a published one names it: an earlier commit of this
+// lineage whose committed package carries that older version.
+function bindPreviousRelease(root: string, value: unknown, version: string, candidateSha: string): { version: string; sha: string } {
+    const v = value as { version?: unknown; sha?: unknown } | null;
+    if (!v || typeof v.version !== 'string' || !VERSION.test(v.version) || !hex(v.sha, 40) || !newer(version, v.version) ||
+        v.sha === candidateSha || !isAncestor(root, v.sha, candidateSha))
+        fail('PREVIOUS_RELEASE_INVALID');
+    let packaged: unknown;
+    try { packaged = JSON.parse(git(root, 'show', `${v.sha}:package.json`)).version; }
+    catch { fail('PREVIOUS_RELEASE_INVALID'); }
+    if (packaged !== v.version.slice(1)) fail('PREVIOUS_RELEASE_INVALID');
+    return { version: v.version, sha: v.sha };
 }
 function assertPackageVersion(root: string, version: string, commit = 'HEAD'): void {
     let value: unknown;
@@ -97,7 +134,10 @@ export async function prepare(args: {
     output: string;
     evidence: string;
     channel?: 'stable' | 'beta';
+    // A correction of the reviewed, unpublished candidate at HEAD^.
     predecessor?: { receiptPath: string; approval: string };
+    // The published release a new version follows.
+    previousRelease?: { version: string; sha: string };
 }): Promise<Candidate> {
     const root = await realpath(args.root), output = join(await realpath(dirname(resolve(args.output))), basename(args.output));
     const rel = relative(root, output);
@@ -105,10 +145,12 @@ export async function prepare(args: {
         fail('OUTPUT_MUST_BE_EXTERNAL');
     const state = await inspectRoot(root);
     const channel = args.channel ?? 'stable';
-    const version = releaseVersion(channel);
-    assertPackageVersion(root, version);
+    const version = releaseVersion(root, channel);
     let parentReceiptSha256: string | null = null;
-    if (state.candidateSha !== state.rootSha) {
+    let previousRelease: Candidate['previousRelease'] = null;
+    if (args.predecessor && args.previousRelease) fail('PREDECESSOR_BINDING_INVALID');
+    if (args.previousRelease) previousRelease = bindPreviousRelease(root, args.previousRelease, version, state.candidateSha);
+    else if (state.candidateSha !== state.rootSha) {
         if (!args.predecessor) fail('PREDECESSOR_REVIEW_REQUIRED');
         const bytes = await readFile(args.predecessor.receiptPath);
         const previous: Candidate = JSON.parse(bytes.toString());
@@ -118,8 +160,10 @@ export async function prepare(args: {
         const ancestors = git(root, 'rev-list', '--reverse', parent).split('\n');
         const tracked = git(root, 'for-each-ref', '--format=%(objectname)', 'refs/remotes/origin/main');
         if (tracked && tracked !== parent && tracked !== state.candidateSha) fail('PREDECESSOR_BINDING_INVALID');
-        if (previous.channel !== channel || previous.version !== version || previous.schemaVersion !== 1 || previous.repository !== 'bentcarroll-cmyk/agent-job-pipeline' || previous.candidateSha !== parent || previous.rootSha !== state.rootSha || previous.lineageSha256 !== sha256(JSON.stringify(ancestors)) || previous.treeSha !== git(root, 'rev-parse', `${parent}^{tree}`) || previous.manifestSha256 !== sha256(execFileSync('git', ['-C', root, 'show', `${parent}:.release/public-manifest.json`]))) fail('PREDECESSOR_BINDING_INVALID');
+        if (previous.channel !== channel || previous.version !== version || previous.schemaVersion !== 2 || !('previousRelease' in previous) || previous.repository !== 'bentcarroll-cmyk/agent-job-pipeline' || previous.candidateSha !== parent || previous.rootSha !== state.rootSha || previous.lineageSha256 !== sha256(JSON.stringify(ancestors)) || previous.treeSha !== git(root, 'rev-parse', `${parent}^{tree}`) || previous.manifestSha256 !== sha256(execFileSync('git', ['-C', root, 'show', `${parent}:.release/public-manifest.json`]))) fail('PREDECESSOR_BINDING_INVALID');
         assertPackageVersion(root, previous.version, parent);
+        // A correction keeps the release its predecessor follows.
+        if (previous.previousRelease !== null) previousRelease = bindPreviousRelease(root, previous.previousRelease, version, state.candidateSha);
         parentReceiptSha256 = sha256(bytes);
     } else if (args.predecessor) fail('PREDECESSOR_BINDING_INVALID');
     const evidence = JSON.parse(await readFile(args.evidence, 'utf8'));
@@ -133,7 +177,7 @@ export async function prepare(args: {
     if (!(await verifyRelease(archive.archive)).passed)
         fail('ARCHIVE_VERIFICATION_FAILED');
     const hash = async (p: string) => sha256(await readFile(join(root, p)));
-    const candidate: Candidate = { schemaVersion: 1, channel, version, repository: 'bentcarroll-cmyk/agent-job-pipeline', ...state, parentReceiptSha256, archiveSha256: archive.sha256, installationResultsSha256: await hash('docs/installation-results.md'), releaseNotesSha256: await hash('docs/release-notes.md'), licenseSha256: await hash('LICENSE'), platforms: ['macos-arm64'], checks: evidence.checks };
+    const candidate: Candidate = { schemaVersion: 2, channel, version, repository: 'bentcarroll-cmyk/agent-job-pipeline', previousRelease, ...state, parentReceiptSha256, archiveSha256: archive.sha256, installationResultsSha256: await hash('docs/installation-results.md'), releaseNotesSha256: await hash('docs/release-notes.md'), licenseSha256: await hash('LICENSE'), platforms: ['macos-arm64'], checks: evidence.checks };
     await writeFile(join(output, 'candidate.json'), JSON.stringify(candidate, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
     return candidate;
 }
@@ -147,11 +191,12 @@ export async function assertPublishable(args: {
     const approval = JSON.parse(await readFile(args.approval, 'utf8'));
     if (approval.schemaVersion !== 1 || approval.approved !== true || approval.candidateReceiptSha256 !== sha256(bytes) || !Number.isFinite(Date.parse(approval.reviewedAt)))
         fail('CANDIDATE_REVIEW_STALE');
-    if (c.schemaVersion !== 1 || !['stable', 'beta'].includes(c.channel) || c.version !== RELEASE_VERSIONS[c.channel] || c.repository !== 'bentcarroll-cmyk/agent-job-pipeline' || !hex(c.candidateSha, 40) || JSON.stringify(c.platforms) !== JSON.stringify(['macos-arm64']))
+    if (c.schemaVersion !== 2 || !['stable', 'beta'].includes(c.channel) || typeof c.version !== 'string' || !VERSION.test(c.version) || channelOf(c.version) !== c.channel || !('previousRelease' in c) || c.repository !== 'bentcarroll-cmyk/agent-job-pipeline' || !hex(c.candidateSha, 40) || JSON.stringify(c.platforms) !== JSON.stringify(['macos-arm64']))
         fail('CANDIDATE_RECEIPT_INVALID');
     if (git(args.root, 'rev-parse', 'HEAD') !== c.candidateSha)
         fail('CANDIDATE_MOVED');
     assertPackageVersion(args.root, c.version);
+    if (c.previousRelease !== null) bindPreviousRelease(args.root, c.previousRelease, c.version, c.candidateSha);
     validateChecks(c.checks, c.candidateSha);
     const required = c.channel === 'beta' ? BETA_REQUIRED_CHECKS : REQUIRED_CHECKS;
     if (c.checks.some(check => check.status === 'failed' || (required.includes(check.name) && check.status !== 'passed')))
@@ -161,7 +206,12 @@ export async function assertPublishable(args: {
     if (!(await verifyRelease(archive)).passed)
         fail('ARCHIVE_VERIFICATION_FAILED');
     const raw = await readFile(archive);
-    if (state.rootSha !== c.rootSha || state.lineageSha256 !== c.lineageSha256 || (state.rootSha === state.candidateSha ? c.parentReceiptSha256 !== null : !hex(c.parentReceiptSha256, 64)) || state.treeSha !== c.treeSha || state.manifestSha256 !== c.manifestSha256 || sha256(raw) !== c.archiveSha256)
+    // A later commit is reviewed either as a correction of the candidate before
+    // it (a parent receipt) or as a new version after a published release.
+    const reviewed = state.rootSha === state.candidateSha
+        ? c.parentReceiptSha256 === null && c.previousRelease === null
+        : hex(c.parentReceiptSha256, 64) || (c.parentReceiptSha256 === null && c.previousRelease !== null);
+    if (state.rootSha !== c.rootSha || state.lineageSha256 !== c.lineageSha256 || !reviewed || state.treeSha !== c.treeSha || state.manifestSha256 !== c.manifestSha256 || sha256(raw) !== c.archiveSha256)
         fail('CANDIDATE_CONTENT_MISMATCH');
     const files = untar(gunzipSync(raw));
     for (const [path, bytes] of files) {
@@ -212,31 +262,76 @@ export async function publish(args: {
     const repo = c.repository;
     const base = `repos/${repo}`;
     const remote = api(base);
-    // Staging is separate and controller-reviewed. Never create/adopt/push a development checkout here.
-    if (remote.full_name !== repo || remote.private !== true || remote.default_branch !== 'main')
+    // A first release is staged privately and made public here. A later release
+    // goes to the already public repository, whose visibility it never changes.
+    // Never create/adopt/push a development checkout here.
+    const followUp = c.previousRelease !== null;
+    if (remote.full_name !== repo || remote.default_branch !== 'main')
+        fail('REMOTE_REPOSITORY_UNREVIEWED');
+    if (!followUp && remote.private !== true)
         fail('PRIVATE_STAGING_REQUIRED');
+    if (followUp && remote.private !== false)
+        fail('PUBLIC_REPOSITORY_REQUIRED');
+    type Release = { id: number; tag_name: string; name: string; body: string; draft: boolean; prerelease: boolean; target_commitish?: string; html_url: string; assets: { id: number; name: string }[] };
+    const releaseInventory = (): Release[] => {
+        const releases = api(`${base}/releases?per_page=100`);
+        // A full page may hide more; fail closed.
+        if (!Array.isArray(releases) || releases.length >= 100)
+            fail('REMOTE_RELEASE_INVENTORY_UNREVIEWED');
+        return releases;
+    };
+    // The releases already published, as first observed: none before a first
+    // release; otherwise older published versions, including the one this
+    // release follows. They must stay exactly as they are.
+    const prior = releaseInventory();
+    if (!followUp ? prior.length !== 0
+        : prior.some(r => !Number.isSafeInteger(r.id) || r.draft !== false || typeof r.tag_name !== 'string' || r.name !== r.tag_name || !VERSION.test(r.tag_name) ||
+            !newer(c.version, r.tag_name) || r.prerelease !== (channelOf(r.tag_name) === 'beta') ||
+            !Array.isArray(r.assets) || r.assets.some(a => !Number.isSafeInteger(a?.id) || typeof a?.name !== 'string')) ||
+          new Set(prior.map(r => r.tag_name)).size !== prior.length ||
+          // The release followed is the newest published one.
+          !prior.some(r => r.tag_name === c.previousRelease!.version) || prior.some(r => newer(r.tag_name, c.previousRelease!.version)))
+        fail('REMOTE_RELEASE_INVENTORY_UNREVIEWED');
+    const snapshot = (releases: Release[]) => JSON.stringify(releases.map(r => [r.id, r.tag_name, r.name, r.body, r.draft, r.prerelease,
+        Array.isArray(r.assets) ? r.assets.map(a => [a?.id, a?.name]).sort() : null]).sort());
+    const priorSnapshot = snapshot(prior);
+    const requirePriorReleases = (releases: Release[]) => {
+        if (snapshot(releases) !== priorSnapshot)
+            fail('REMOTE_RELEASE_INVENTORY_UNREVIEWED');
+    };
     let tagCreated = false;
+    // Each earlier release's tag, as first observed on an earlier commit of this lineage.
+    const priorTags = new Map(prior.map(r => [`refs/tags/${r.tag_name}`, r.tag_name]));
+    const priorTagShas = new Map<string, string>();
     const verifyRemote = () => {
         const refs = api(`${base}/git/matching-refs/`);
-        const expected = tagCreated ? ['refs/heads/main', `refs/tags/${c.version}`] : ['refs/heads/main'];
-        if (!Array.isArray(refs) || refs.length !== expected.length || new Set(refs.map(r => r.ref)).size !== expected.length || refs.some(r => !expected.includes(r.ref) || r.object?.type !== 'commit' || r.object.sha !== c.candidateSha))
+        const expected = 1 + prior.length + (tagCreated ? 1 : 0);
+        if (!Array.isArray(refs) || refs.length !== expected || new Set(refs.map(r => r.ref)).size !== expected)
             fail('REMOTE_REFS_UNREVIEWED');
+        for (const r of refs) {
+            const sha = r.object?.sha;
+            if (r.object?.type !== 'commit')
+                fail('REMOTE_REFS_UNREVIEWED');
+            if (r.ref === 'refs/heads/main' || (tagCreated && r.ref === `refs/tags/${c.version}`)) {
+                if (sha !== c.candidateSha) fail('REMOTE_REFS_UNREVIEWED');
+                continue;
+            }
+            const tag = priorTags.get(r.ref);
+            const known = priorTagShas.get(r.ref);
+            if (!tag || !hex(sha, 40) || (known ? sha !== known : sha === c.candidateSha || !isAncestor(args.root, sha, c.candidateSha)) ||
+                (tag === c.previousRelease?.version && sha !== c.previousRelease.sha))
+                fail('REMOTE_REFS_UNREVIEWED');
+            priorTagShas.set(r.ref, sha);
+        }
         if (api(`${base}/git/ref/heads/main`).object.sha !== c.candidateSha)
             fail('REMOTE_CANDIDATE_MOVED');
         validateHostedChecks(api(`${base}/commits/${c.candidateSha}/check-runs?per_page=100&filter=latest`), c.candidateSha);
     };
-    const releaseInventory = () => api(`${base}/releases?per_page=100`);
-    const requireEmptyReleases = () => {
-        const releases = releaseInventory();
-        if (!Array.isArray(releases) || releases.length !== 0)
-            fail('REMOTE_RELEASE_INVENTORY_UNREVIEWED');
-    };
     verifyRemote();
-    requireEmptyReleases();
     // Recheck local bindings and all inventory immediately before the first remote mutation.
     await assertPublishable(args);
     verifyRemote();
-    requireEmptyReleases();
+    requirePriorReleases(releaseInventory());
     const archive = join(resolve(args.receiptPath, '..'), 'agent-job-pipeline.tar.gz');
     const expectedAssets = [
         { name: 'agent-job-pipeline.tar.gz', bytes: await readFile(archive) },
@@ -244,23 +339,32 @@ export async function publish(args: {
     ];
     const releaseNotes = await readFile(join(args.root, 'docs/release-notes.md'), 'utf8');
     const prerelease = c.channel === 'beta';
-    const hasExpectedMetadata = (r: { tag_name: string; name: string; body: string; prerelease: boolean }) => r.tag_name === c.version && r.name === c.version && r.body === releaseNotes && r.prerelease === prerelease;
-    gh('api', `${base}/git/refs`, '--method', 'POST', '-f', `ref=refs/tags/${c.version}`, '-f', `sha=${c.candidateSha}`);
-    tagCreated = true;
+    const hasExpectedMetadata = (r: Release) => r.tag_name === c.version && r.name === c.version && r.body === releaseNotes && r.prerelease === prerelease &&
+        (!followUp || r.target_commitish === c.candidateSha);
+    // A first release tags the candidate in its private staging repository
+    // first. A later release's repository is already public, so its draft
+    // targets the candidate and GitHub creates the tag only when the draft is
+    // published: a refusal before then leaves at most an unpublished draft.
+    if (!followUp) {
+        gh('api', `${base}/git/refs`, '--method', 'POST', '-f', `ref=refs/tags/${c.version}`, '-f', `sha=${c.candidateSha}`);
+        tagCreated = true;
+    }
     // Bind the identity returned by creation; never adopt a release found later by tag/name.
-    const created = JSON.parse(gh('api', `${base}/releases`, '--method', 'POST', '-f', `tag_name=${c.version}`, '-f', `name=${c.version}`, '-F', 'draft=true', '-F', `prerelease=${prerelease}`, '-f', `make_latest=${prerelease ? 'false' : 'true'}`, '-F', `body=@${join(args.root, 'docs/release-notes.md')}`));
+    const created = JSON.parse(gh('api', `${base}/releases`, '--method', 'POST', '-f', `tag_name=${c.version}`, ...(followUp ? ['-f', `target_commitish=${c.candidateSha}`] : []), '-f', `name=${c.version}`, '-F', 'draft=true', '-F', `prerelease=${prerelease}`, '-f', `make_latest=${prerelease ? 'false' : 'true'}`, '-F', `body=@${join(args.root, 'docs/release-notes.md')}`));
     if (!Number.isSafeInteger(created.id) || created.id <= 0 || !hasExpectedMetadata(created) || created.draft !== true)
         fail('REMOTE_RELEASE_INVENTORY_UNREVIEWED');
     const releaseId: number = created.id;
     gh('release', 'upload', c.version, '--repo', repo, archive, archive + '.sha256');
     let assetIds: readonly number[] | undefined;
     const verifyInventory = (draft: boolean) => {
-        // With exactly one release and two assets, a full first page is sufficient:
-        // any additional inventory (including a release without a Git tag) fails closed.
+        // Exactly this release beside the unchanged earlier ones: any other
+        // inventory (including a release without a Git tag) fails closed.
         const releases = releaseInventory();
-        if (!Array.isArray(releases) || releases.length !== 1 || releases[0].id !== releaseId || !hasExpectedMetadata(releases[0]) || releases[0].draft !== draft)
+        const mine = releases.filter(r => r.id === releaseId);
+        if (mine.length !== 1 || !hasExpectedMetadata(mine[0]) || mine[0].draft !== draft)
             fail('REMOTE_RELEASE_INVENTORY_UNREVIEWED');
-        const release = releases[0];
+        requirePriorReleases(releases.filter(r => r.id !== releaseId));
+        const release = mine[0];
         const assets = api(`${base}/releases/${releaseId}/assets?per_page=100`);
         const validateAssets = (items: { name: string; id: number }[]) => {
             if (!Array.isArray(items) || items.length !== expectedAssets.length || new Set(items.map(a => a.id)).size !== expectedAssets.length || new Set(items.map(a => a.name)).size !== expectedAssets.length || items.some(a => !Number.isSafeInteger(a.id) || a.id <= 0 || !expectedAssets.some(e => e.name === a.name)))
@@ -283,9 +387,15 @@ export async function publish(args: {
     verifyRemote();
     await assertPublishable(args);
     verifyInventory(true);
-    gh('repo', 'edit', repo, '--visibility', 'public', '--accept-visibility-change-consequences');
+    if (!followUp)
+        gh('repo', 'edit', repo, '--visibility', 'public', '--accept-visibility-change-consequences');
+    else if (api(base).private !== false)
+        fail('PUBLIC_REPOSITORY_REQUIRED');
     verifyInventory(true);
+    // Refs, main and hosted checks once more, immediately before the release is published.
+    verifyRemote();
     gh('api', `${base}/releases/${releaseId}`, '--method', 'PATCH', '-F', 'draft=false', '-F', `prerelease=${prerelease}`, '-f', `make_latest=${prerelease ? 'false' : 'true'}`);
+    tagCreated = true;
     verifyRemote();
     const final = verifyInventory(false);
     if (api(base).private !== false || api(`${base}/git/ref/tags/${c.version}`).object.sha !== c.candidateSha)
@@ -305,7 +415,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         }
         const need = (name: string) => options.get(name) ?? fail('USAGE');
         if (command === 'prepare')
-            console.log(JSON.stringify(await prepare({ root: need('--root'), output: need('--output'), evidence: need('--evidence'), channel: (options.get('--channel') ?? 'stable') as Candidate['channel'], ...(options.has('--previous-candidate') || options.has('--previous-approval') ? { predecessor: { receiptPath: need('--previous-candidate'), approval: need('--previous-approval') } } : {}) })));
+            console.log(JSON.stringify(await prepare({ root: need('--root'), output: need('--output'), evidence: need('--evidence'), channel: (options.get('--channel') ?? 'stable') as Candidate['channel'],
+                ...(options.has('--previous-candidate') || options.has('--previous-approval') ? { predecessor: { receiptPath: need('--previous-candidate'), approval: need('--previous-approval') } } : {}),
+                ...(options.has('--previous-release') || options.has('--previous-release-sha') ? { previousRelease: { version: need('--previous-release'), sha: need('--previous-release-sha') } } : {}) })));
         else if (command === 'publish')
             console.log(JSON.stringify(await publish({ root: need('--root'), receiptPath: need('--candidate'), approval: need('--approval') })));
         else

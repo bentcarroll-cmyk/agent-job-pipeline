@@ -1,6 +1,6 @@
 # Your accounts and capabilities
 
-This is the `0.1.0-beta.1` evaluation beta. Local verification is scoped to macOS arm64. Full native installation and live discovery, Slack, Gmail and resource cleanup remain unverified; setup still requires your own selected accounts, credentials and consent. Beta publication does not establish successful hosted installation.
+This is the `0.1.0-beta.2` evaluation beta. Local verification is scoped to macOS arm64. Full native installation and live discovery, Slack, Gmail and resource cleanup remain unverified; setup still requires your own selected accounts, credentials and consent. Beta publication does not establish successful hosted installation.
 
 Use accounts you control and select the exact destination before granting access. A coding-assistant subscription does not establish access or paid usage for the hosted services. Check current provider pricing, limits, available models and organization permissions in your own accounts before live deployment; offline builds do not prove them.
 

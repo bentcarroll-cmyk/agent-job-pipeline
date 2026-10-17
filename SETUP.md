@@ -1,10 +1,10 @@
 # Guided setup on macOS
 
-This is the `0.1.0-beta.1` evaluation beta. Local verification is scoped to macOS arm64. Full native installation and live discovery, Slack, Gmail and resource cleanup remain unverified; setup still requires your own selected accounts, credentials and consent. Beta publication does not establish successful hosted installation.
+This is the `0.1.0-beta.2` evaluation beta. Local verification is scoped to macOS arm64. Full native installation and live discovery, Slack, Gmail and resource cleanup remain unverified; setup still requires your own selected accounts, credentials and consent. Beta publication does not establish successful hosted installation.
 
-Copy this prompt into Codex or Claude Code. The repository and prerelease below are the intended setup destination. Use this prompt only after verifying the published `v0.1.0-beta.1` tag, final publication readback receipt and downloaded asset checksum; this guide does not assert that publication has occurred.
+Copy this prompt into Codex or Claude Code. The repository and prerelease below are the intended setup destination. Use this prompt only after verifying the published `v0.1.0-beta.2` tag, final publication readback receipt and downloaded asset checksum; this guide does not assert that publication has occurred.
 
-> Set up Agent Job Pipeline from https://github.com/bentcarroll-cmyk/agent-job-pipeline at the reviewed v0.1.0-beta.1 prerelease. Read SETUP.md and AGENTS.md. Help me select a private career workspace outside the checkout, interview me from my resume, and review the exact readable criteria and machine configuration before recording my approval. Identify enabled services, account choices, schedules and costs before authorized external actions. Keep secrets out of chat and preserve resumable private receipts. Distinguish actual account checks from synthetic and offline checks. Prepare application materials only when I request them.
+> Set up Agent Job Pipeline from https://github.com/bentcarroll-cmyk/agent-job-pipeline at the reviewed v0.1.0-beta.2 prerelease. Read SETUP.md and AGENTS.md. Help me select a private career workspace outside the checkout, interview me from my resume, and review the exact readable criteria and machine configuration before recording my approval. Identify enabled services, account choices, schedules and costs before authorized external actions. Keep secrets out of chat and preserve resumable private receipts. Distinguish actual account checks from synthetic and offline checks. Prepare application materials only when I request them.
 
 ## Assistant access
 
