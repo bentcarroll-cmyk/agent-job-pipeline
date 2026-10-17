@@ -74,8 +74,7 @@ export function renderSummary(
     } else if (item.kind === "round") {
       lines.push(section(roundLine(item), undo(item.messageId)));
     } else if (item.kind === "scheduled") {
-      // A time is not undoable: the next scheduling email simply overwrites it.
-      lines.push(section(`🗓 ${who(item.employer, item.title)}: *round ${item.round}* on ${whenLabel(item.scheduledFor, opts.timezone)}`));
+      lines.push(section(`🗓 ${who(item.employer, item.title)}: *round ${item.round}* on ${whenLabel(item.scheduledFor, opts.timezone)}`, undo(item.messageId)));
     } else if (item.kind === "fyi") {
       lines.push(section(`ℹ️ ${esc(item.note)}`));
     } else {

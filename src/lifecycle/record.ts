@@ -13,6 +13,7 @@ import {
   latestRounds,
   markAnnounced,
   readLedger,
+  restoreRoundSchedule,
   roundByThread,
   roundsFor,
   saveReceipt,
@@ -21,11 +22,26 @@ import {
   scheduledRounds,
   setSlackTs,
   staleQuestionCount,
+  threadOwners,
   unannounced,
   updateRoundSchedule,
+  updateRoundStage,
   type ReceiptRow,
 } from "./db";
-import { assignRound, decide, roundForInvite, undoStatements, type BeforeState, type Change, type Decision } from "./decide";
+import {
+  assignRound,
+  decideInThread,
+  fromOwner,
+  happenedBefore,
+  isReply,
+  opensRound,
+  roundForInvite,
+  startsFirstRound,
+  undoStatements,
+  type BeforeState,
+  type Change,
+  type Decision,
+} from "./decide";
 import { toEvidence, type EmailMeta } from "./evidence";
 import { evidenceLine } from "./gmail-message";
 import {
@@ -47,6 +63,8 @@ export type Classified =
 type RoundNote = { round: number; stage: string | null; employer: string; title: string | null };
 type ScheduledNote = { round: number; scheduledFor: string; employer: string; title: string | null };
 type ChangeJson = { status?: Change; round?: RoundNote; scheduled?: ScheduledNote; note?: string };
+// What Undo needs to put back a time a scheduling email moved.
+type ScheduleBefore = { kind: "schedule"; roundId: number; scheduledFor: string | null };
 
 function baseReceipt(email: EmailMeta, prior: ReceiptRow | null, live: boolean, now: string): ReceiptRow {
   return {
@@ -77,8 +95,15 @@ function baseReceipt(email: EmailMeta, prior: ReceiptRow | null, live: boolean, 
   };
 }
 
-// Adds (or, for another email in the same thread, updates) an interview
-// round. In test mode it only works out what the round would be.
+// The applications this email's conversation has already been recorded
+// against (see isReply for why only a reply has one).
+const conversationOwners = async (db: D1Database, email: Pick<EmailMeta, "threadId" | "subject">) =>
+  isReply(email.subject) ? threadOwners(db, email.threadId) : [];
+
+// Adds an interview round, or a second conversation to one still to come;
+// another email about a round already on record only fills in its time or
+// step (see assignRound). In test mode it only works out what the round
+// would be.
 async function recordRound(
   db: D1Database,
   owner: { table: string; id: string; employer: string; title: string | null },
@@ -89,9 +114,17 @@ async function recordRound(
   pending?: LifecycleWriteBatch,
 ): Promise<RoundNote | null> {
   if (owner.id.startsWith("new:")) return null;
-  const a = assignRound(await roundsFor(db, owner.table, owner.id), email.threadId);
+  const a = assignRound(await roundsFor(db, owner.table, owner.id), {
+    threadId: email.threadId,
+    date: email.date,
+    stage: c.roundStage,
+    scheduledFor: c.scheduledFor,
+    opensRound: opensRound(email),
+  });
+  if (a.action === "none") return null;
   if (a.action === "update") {
-    if (live && c.scheduledFor) await updateRoundSchedule(db, a.id, c.scheduledFor, pending?.statements);
+    if (live && a.scheduledFor) await updateRoundSchedule(db, a.id, a.scheduledFor, pending?.statements);
+    if (live && a.stage) await updateRoundStage(db, a.id, a.stage, pending?.statements);
     return null;
   }
   if (live) {
@@ -110,10 +143,11 @@ async function recordRound(
   return { round: a.round, stage: c.roundStage, employer: owner.employer, title: owner.title };
 }
 
-// A scheduling email in a thread that already has a round carries that
+// A scheduling email in a thread whose round is still to come carries that
 // round's time ("Re: Next Steps… confirmed for Wednesday at 11"); so does a
-// calendar invite from the employer (see roundForInvite). Nothing else about
-// a logistics email is recorded.
+// calendar invite from the employer (see roundForInvite). The owner's own
+// mail only asks about or quotes a time, so it sets none. Nothing else about a
+// logistics email is recorded.
 async function recordSchedule(
   db: D1Database,
   email: EmailMeta,
@@ -121,9 +155,10 @@ async function recordSchedule(
   rows: LedgerRow[],
   live: boolean,
   pending?: LifecycleWriteBatch,
-): Promise<{ ownerTable: string; ownerId: string; note: ScheduledNote } | null> {
-  if (!c.scheduledFor) return null;
-  const round = (await roundByThread(db, email.threadId)) ?? roundForInvite(await latestRounds(db), rows, email, c.employer);
+): Promise<{ ownerTable: string; ownerId: string; note: ScheduledNote; before: ScheduleBefore } | null> {
+  if (!c.scheduledFor || fromOwner(email)) return null;
+  const thread = await roundByThread(db, email.threadId);
+  const round = (thread && !happenedBefore(thread, email.date) ? thread : null) ?? roundForInvite(await latestRounds(db), rows, email, c.employer);
   if (!round || round.scheduledFor === c.scheduledFor) return null;
   if (live) await updateRoundSchedule(db, round.id, c.scheduledFor, pending?.statements);
   const owner = rows.find((x) => x.ownerId === round.ownerId);
@@ -131,6 +166,7 @@ async function recordSchedule(
     ownerTable: round.ownerTable,
     ownerId: round.ownerId,
     note: { round: round.round, scheduledFor: c.scheduledFor, employer: owner?.employer ?? "", title: owner?.title ?? null },
+    before: { kind: "schedule", roundId: round.id, scheduledFor: round.scheduledFor },
   };
 }
 
@@ -217,23 +253,31 @@ export async function decideAndRecord(db: D1Database, item: Classified, live: bo
     return persist({ ...r, decision, attempts });
   }
 
-  const c = item.c;
+  let c = item.c;
   r = { ...r, event: c.event, employer: c.employer, title: c.title, requisition_id: c.requisitionId, round_stage: c.roundStage, scheduled_for: c.scheduledFor };
   const rows = await readLedger(db);
-  const ev = toEvidence(item.email, c, rows);
-  if (ev.kind === "ignore") {
-    if (ev.reason === "logistics") {
-      const scheduled = await recordSchedule(db, item.email, c, rows, live, pending);
-      if (scheduled) {
-        return persist({
-          ...r,
-          decision: "scheduled",
-          owner_table: scheduled.ownerTable,
-          owner_id: scheduled.ownerId,
-          change_json: JSON.stringify({ scheduled: scheduled.note }),
-        });
-      }
+  let ev = toEvidence(item.email, c, rows);
+  if (ev.kind === "ignore" && ev.reason === "logistics") {
+    const scheduled = await recordSchedule(db, item.email, c, rows, live, pending);
+    if (scheduled) {
+      return persist({
+        ...r,
+        decision: "scheduled",
+        owner_table: scheduled.ownerTable,
+        owner_id: scheduled.ownerId,
+        change_json: JSON.stringify({ scheduled: scheduled.note }),
+        before_json: JSON.stringify(scheduled.before),
+      });
     }
+    // Recorded as the invitation it stands for, so a Slack answer to any
+    // question it raises records the round too.
+    if (startsFirstRound(await latestRounds(db), rows, item.email, c)) {
+      c = { ...c, event: "interview_invitation" };
+      r = { ...r, event: c.event };
+      ev = toEvidence(item.email, c, rows);
+    }
+  }
+  if (ev.kind === "ignore") {
     const decision = ev.reason === "not_job" ? "not_job" : "ignored";
     return persist({ ...r, decision });
   }
@@ -243,7 +287,7 @@ export async function decideAndRecord(db: D1Database, item: Classified, live: bo
   // Stored as resolved (an Indeed email's employer), so an answer rebuilds
   // the same evidence and the same question id.
   r = { ...r, employer: ev.evidence.employer };
-  const d = decide(rows, ev.evidence, null, now);
+  const d = decideInThread(rows, ev.evidence, null, await conversationOwners(db, item.email), now);
   const saved = await applyDecision(db, r, d, item.email, c, live, now, "applied", pending);
   return persist(saved);
 }
@@ -337,7 +381,7 @@ export async function answerQuestion(
   if (!r || r.decision !== "question" || !r.question_id) return;
   const question = JSON.parse(r.question_json!) as Question;
   const rows = await readLedger(db);
-  const d = decide(rows, evidenceFromReceipt(r), { questionId: r.question_id, value: option }, now);
+  const d = decideInThread(rows, evidenceFromReceipt(r), { questionId: r.question_id, value: option }, await conversationOwners(db, metaOf(r)), now);
   const saved = await applyDecision(db, { ...r, answer: option, updated_at: now }, d, metaOf(r), classificationOf(r), true, now, "answered");
   await saveReceipt(db, saved);
 
@@ -367,10 +411,14 @@ export async function undoChange(
 ): Promise<void> {
   const db = env.DB;
   const r = await getReceipt(db, messageId);
-  if (!r || !["applied", "answered"].includes(r.decision) || !r.before_json) return;
-  const before = JSON.parse(r.before_json) as BeforeState | { kind: "round" };
-  if (before.kind !== "round" && r.owner_id) await executeStatements(db, undoStatements(before, r.owner_id));
-  await deleteRoundsForMessage(db, messageId);
+  if (!r || !["applied", "answered", "scheduled"].includes(r.decision) || !r.before_json) return;
+  const before = JSON.parse(r.before_json) as BeforeState | { kind: "round" } | ScheduleBefore;
+  if (before.kind === "schedule") {
+    if (r.scheduled_for) await restoreRoundSchedule(db, before.roundId, r.scheduled_for, before.scheduledFor);
+  } else {
+    if (before.kind !== "round" && r.owner_id) await executeStatements(db, undoStatements(before, r.owner_id));
+    await deleteRoundsForMessage(db, messageId);
+  }
   await saveReceipt(db, { ...r, decision: "ignored", updated_at: new Date().toISOString() });
   await updateMessage(env, where.channelId, where.messageTs, markUndone(where.blocks as any[], messageId), where.text);
 }

@@ -15,6 +15,8 @@ const publicSenders: Record<string, readonly string[]> = {
     "src/lifecycle/evidence.ts": ["indeedapply@" + "indeed.com"],
     "src/lifecycle/gmail-client.ts": ["indeedapply@" + "indeed.com", "jobalerts-noreply@" + "linkedin.com"],
     "tests/lifecycle/instance.test.ts": ["indeedapply@" + "indeed.com"],
+    "tests/lifecycle/rounds.test.ts": ["hello@" + "aiapplynotif.com", "calendar-notification@" + "google.com"],
+    "tests/integration/lifecycle-rounds.test.ts": ["hello@" + "aiapplynotif.com"],
 };
 const git = (root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 export function scanContent(path: string, bytes: Buffer | string, metadata = false): PrivacyFinding[] {

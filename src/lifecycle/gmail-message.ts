@@ -9,9 +9,10 @@ export type GmailPart = {
   parts?: GmailPart[];
 };
 
-export type GmailApiMessage = { id: string; threadId: string; internalDate?: string; payload?: GmailPart };
+export type GmailApiMessage = { id: string; threadId: string; internalDate?: string; labelIds?: string[]; payload?: GmailPart };
 
-export type EmailMessage = { id: string; threadId: string; from: string; subject: string; date: string; text: string };
+// byOwner: Gmail labels the message SENT or DRAFT, so the mailbox owner wrote it.
+export type EmailMessage = { id: string; threadId: string; from: string; subject: string; date: string; text: string; byOwner?: boolean };
 
 // Enough for any confirmation, rejection or invitation; the rest of a long
 // email is signatures, legal text and quoted history.
@@ -57,6 +58,7 @@ export function parseMessage(msg: GmailApiMessage): EmailMessage {
     subject: header("Subject"),
     date: date.toISOString(),
     text: extractText(msg.payload),
+    byOwner: msg.labelIds?.some((label) => label === "SENT" || label === "DRAFT") === true,
   };
 }
 

@@ -1,6 +1,7 @@
 import { fencedBatch, type DiscoveryLease } from "./operations/leases";
 import { embeddedGreenhouseJobId, type Source, type NormalizedJob } from "./sources";
 import type { Verdict } from "./criteria";
+import { employerVariants } from "./ledger/normalize";
 import { jobRefId, parseJobUrl, workdaySite, titleCaseSlug, type JobRef } from "./unbounded/discovery";
 
 export type KnownApplication = { status: string | null; source_job_id: string | null };
@@ -90,6 +91,22 @@ export type EmployerApplicationLookup =
   | { kind: "matched"; application: KnownApplication }
   | { kind: "ambiguous" };
 
+// The ledger records an employer that goes by two names as "A / B"
+// ("Acme / Acme Holdings"), while a posting names it from an ATS slug or the
+// source registry. They are the same employer when a normalized name is
+// shared. A name made only of words normalization drops ("The Company")
+// stands as written.
+function employerNames(name: string | null): string[] {
+  const variants = employerVariants(name ?? "");
+  const written = name?.trim().toLowerCase();
+  return variants.length || !written ? variants : [written];
+}
+
+function sameEmployer(recorded: string | null, ...names: (string | null)[]): boolean {
+  const known = new Set(employerNames(recorded));
+  return names.some(name => employerNames(name).some(candidate => known.has(candidate)));
+}
+
 // A requisition is scoped to its employer. Old imports may store the bare
 // requisition as canonical_id, so require the employer too unless an exact
 // owner ID or a resolver-proven posting URL identifies the application.
@@ -99,15 +116,24 @@ export async function lookupKnownEmployerApplication(db: D1Database, input: {
 }): Promise<EmployerApplicationLookup> {
   const aliases = [...new Set(input.aliases)];
   const aliasCondition = aliases.length ? `posting_url IN (${aliases.map(() => "?").join(",")})` : "0";
-  const rows = (await db.prepare(`SELECT status,source_job_id FROM known_applications
-    WHERE canonical_id=? OR ${aliasCondition} OR
-      ((lower(canonical_id)=lower(?) OR lower(requisition_id)=lower(?))
-        AND lower(trim(COALESCE(employer,''))) IN (?,?))
-    ORDER BY id LIMIT 2`).bind(input.ownerJobId, ...aliases, input.requisitionId,
-      input.requisitionId, input.employerKey.toLowerCase(), input.employerName.toLowerCase())
-    .all<KnownApplication>()).results;
-  if (rows.length > 1) return { kind: "ambiguous" };
-  return rows.length ? { kind: "matched", application: rows[0] } : { kind: "none" };
+  // The query finds the requisition at any employer: names are compared
+  // below, where they can be normalized.
+  const rows = (await db.prepare(`SELECT canonical_id,posting_url,requisition_id,employer,status,source_job_id
+    FROM known_applications
+    WHERE canonical_id=? OR ${aliasCondition} OR lower(canonical_id)=lower(?) OR lower(requisition_id)=lower(?)
+    ORDER BY id LIMIT 101`).bind(input.ownerJobId, ...aliases, input.requisitionId, input.requisitionId)
+    .all<KnownApplication & {
+      canonical_id:string|null;posting_url:string|null;requisition_id:string|null;employer:string|null}>()).results;
+  if (rows.length > 100) return { kind: "ambiguous" };
+  const requisition = input.requisitionId.toLowerCase();
+  const matches = rows.filter(row => row.canonical_id === input.ownerJobId ||
+    (row.posting_url !== null && aliases.includes(row.posting_url)) ||
+    ((row.canonical_id?.toLowerCase() === requisition || row.requisition_id?.toLowerCase() === requisition) &&
+      sameEmployer(row.employer, input.employerKey, input.employerName)));
+  if (matches.length > 1) return { kind: "ambiguous" };
+  const [match] = matches;
+  return match ? { kind: "matched", application: { status: match.status, source_job_id: match.source_job_id } }
+    : { kind: "none" };
 }
 
 // A careers page embedding a Greenhouse board carries only the posting's
@@ -116,6 +142,18 @@ export async function lookupKnownEmployerApplication(db: D1Database, input: {
 // bare id: Workday requisitions can be all digits too.
 function greenhouseJobId(url: string, ref: JobRef | null): string | null {
   return ref ? (ref.ats === "greenhouse" ? ref.postingId : null) : embeddedGreenhouseJobId(url);
+}
+
+// Whether a link is evidence of which posting was applied to: an ATS posting
+// URL, or a careers page carrying gh_jid, even one that names two postings
+// and so identifies neither.
+function namesPosting(url: string): boolean {
+  if (parseJobUrl(url, "")) return true;
+  try {
+    return new URL(url).searchParams.has("gh_jid");
+  } catch {
+    return false;
+  }
 }
 
 export type NamedApplication = KnownApplication & { employer: string | null; title: string | null };
@@ -143,7 +181,6 @@ export async function lookupKnownAtsApplication(db: D1Database, input: {
         canonical_id:string|null;posting_url:string|null;requisition_id:string|null}>()).results;
   if (rows.length > 100) return { kind: "ambiguous" };
   const requested = parseJobUrl(input.postingUrl, "");
-  const employer = input.employerName?.trim().toLowerCase();
   const matches = rows.filter(row => {
     // A canonical Workday ID omits the career site. Explicit URL evidence
     // must agree before even an exact ID can establish this application.
@@ -154,7 +191,10 @@ export async function lookupKnownAtsApplication(db: D1Database, input: {
     }
     if (row.canonical_id && jobIds.has(row.canonical_id.toLowerCase())) return true;
     if (row.posting_url === input.postingUrl) return true;
-    if (row.posting_url) {
+    // A recorded link that names a posting decides the match. One that names
+    // none (an Indeed short link, a Google search) is no evidence either way:
+    // the employer and requisition decide, as they do without a link.
+    if (row.posting_url && namesPosting(row.posting_url)) {
       const observed = parseJobUrl(row.posting_url, "");
       if (!requested || !observed) {
         const id = greenhouseJobId(row.posting_url, observed);
@@ -163,7 +203,7 @@ export async function lookupKnownAtsApplication(db: D1Database, input: {
       if (jobRefId(requested) !== jobRefId(observed)) return false;
       return requested.ats !== "workday" || workdaySite(input.postingUrl) === workdaySite(row.posting_url);
     }
-    return !!employer && row.employer?.trim().toLowerCase() === employer &&
+    return sameEmployer(row.employer, input.employerName) &&
       (row.canonical_id?.toLowerCase() === input.postingId.toLowerCase() ||
         row.requisition_id?.toLowerCase() === input.postingId.toLowerCase());
   });

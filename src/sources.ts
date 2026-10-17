@@ -1,6 +1,6 @@
 import { fetchWithDeadline } from "./operations/fetch";
 import { htmlToTextWithProvenance, MAX_COMPENSATION_CHARS, MAX_DESCRIPTION_CHARS, type TextProvenance } from "./description";
-import { parseJobUrl } from "./unbounded/discovery";
+import { parseJobUrl, titleCaseSlug } from "./unbounded/discovery";
 
 const ATS_HOSTS = new Set(["boards.greenhouse.io", "job-boards.greenhouse.io", "jobs.ashbyhq.com", "jobs.lever.co"]);
 
@@ -451,20 +451,24 @@ export async function fetchCompanyBoard(
 // newly-found posting costs exactly one request. (Ashby has no public
 // per-posting endpoint — callers use fetchCompanyBoard for that platform.)
 export type PostingRef = {
-  ats: "greenhouse" | "lever" | "workday";
+  ats: "greenhouse" | "lever" | "workday" | "oracle";
   slug: string;
   postingId: string;
   // Workday's detail endpoint is derived from the public URL: the
   // career-site name and external path appear nowhere else, so tenant plus
-  // requisition id is not enough to rebuild it. Unused by the other two.
+  // requisition id is not enough to rebuild it. Oracle's needs the career
+  // site from it too. Unused by Greenhouse and Lever.
   url: string;
 };
 
+// For Oracle the company argument is not used: its host names Oracle's pod,
+// not the employer, so the name comes from the career site instead.
 export async function fetchPosting(
   ref: PostingRef,
   company: string,
   descriptionLimit: number = MAX_DESCRIPTION_CHARS,
 ): Promise<NormalizedJob | null> {
+  if (ref.ats === "oracle") return fetchOraclePosting(ref, descriptionLimit);
   const url = postingDetailUrl(ref);
   if (!url) throw new Error(`Workday: invalid posting reference for ${ref.slug}/${ref.postingId}`);
 
@@ -673,6 +677,144 @@ export function normalizeWorkdayPosting(
     compensation: null, // not exposed here; the body usually carries the range
     description: description.text,
     contentProvenance: contentProvenance(description, compensation, coverageGaps),
+  };
+}
+
+// Oracle Recruiting Cloud's posting page renders in the browser, but its
+// candidate-experience API returns the whole posting by id as JSON (checked
+// against a live career site in October 2026).
+export function oracleDetailUrl(publicUrl: string): string | null {
+  const ref = parseJobUrl(publicUrl, "");
+  if (ref?.ats !== "oracle") return null;
+  const url = new URL(ref.url);
+  const site = url.pathname.split("/")[5];
+  return `${url.origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails` +
+    `?expand=all&onlyData=true&finder=ById;Id=%22${ref.postingId}%22,siteNumber=${site}`;
+}
+
+// Oracle answers a lookup by id with an empty list once the posting closes.
+// Anything else that is not exactly the requested posting is refused.
+export function oraclePostingItem(raw: any, postingId: string): Record<string, any> | null {
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.items)) throw new Error("Oracle: missing or invalid posting details");
+  if (raw.items.length === 0) {
+    if (raw.hasMore !== false) throw new Error("Oracle: incomplete posting answer");
+    return null;
+  }
+  if (raw.items.length > 1) throw new Error("Oracle: ambiguous posting identity");
+  const item = raw.items[0];
+  if (!item || typeof item !== "object" || String(item.Id ?? "") !== postingId) {
+    throw new Error("Oracle: mismatched posting identity");
+  }
+  return item;
+}
+
+// Neither the API nor the host names the employer (LegalEmployer comes back
+// empty), but the posting page carries the career site's name.
+export function oracleSiteName(html: string): string | null {
+  const meta = /<meta\b[^>]*\bproperty\s*=\s*["']og:site_name["'][^>]*>/i.exec(html)?.[0];
+  const content = meta ? /\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(meta) : null;
+  return content ? htmlToTextWithProvenance(content[1] ?? content[2], 200).text?.trim() || null : null;
+}
+
+// The career site code (often Oracle's default "CX_1") when the site's own
+// name cannot be read.
+export function oracleSiteLabel(publicUrl: string): string {
+  return titleCaseSlug(new URL(publicUrl).pathname.split("/")[5] ?? "");
+}
+
+const ORACLE_SITE_TIMEOUT_MS = 5_000;
+
+async function fetchOraclePosting(ref: PostingRef, descriptionLimit: number): Promise<NormalizedJob | null> {
+  const parsed = parseJobUrl(ref.url, "");
+  const url = oracleDetailUrl(ref.url);
+  if (!url || parsed?.slug !== ref.slug.toLowerCase() || parsed.postingId !== ref.postingId) {
+    throw new Error(`Oracle: invalid posting reference for ${ref.slug}/${ref.postingId}`);
+  }
+  const res = await fetchWithDeadline(url, { redirect: "manual" });
+  if (res.status >= 300 && res.status < 400) throw new Error(`Oracle redirect: HTTP ${res.status}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`oracle/${ref.slug}/${ref.postingId}: HTTP ${res.status}`);
+  const item = oraclePostingItem(await res.json(), parsed.postingId);
+  if (!item) return null;
+  let company = oracleSiteLabel(parsed.url);
+  try {
+    const page = await fetchWithDeadline(parsed.url, { redirect: "manual", signal: AbortSignal.timeout(ORACLE_SITE_TIMEOUT_MS) });
+    if (page.ok) company = oracleSiteName(await page.text()) ?? company;
+  } catch { /* the site code still identifies the employer */ }
+  return normalizeOraclePosting(company, parsed, item, descriptionLimit);
+}
+
+export function normalizeOraclePosting(
+  company: string,
+  ref: Pick<PostingRef, "slug" | "postingId" | "url">,
+  item: Record<string, any>,
+  descriptionLimit: number = MAX_DESCRIPTION_CHARS,
+): NormalizedJob {
+  if (typeof item.Title !== "string" || !item.Title.trim()) throw new Error("Oracle: missing or invalid posting details");
+  const text = (value: unknown) => typeof value === "string" && value.trim() ? value : null;
+
+  // The role's own text comes first so a long posting loses the employer's
+  // shared boilerplate to truncation, not the role.
+  const textGaps: string[] = [];
+  const parts: string[] = [];
+  const textFields: string[] = [];
+  for (const field of ["ExternalDescriptionStr", "ExternalResponsibilitiesStr", "ExternalQualificationsStr",
+    "OrganizationDescriptionStr", "CorporateDescriptionStr"]) {
+    if (typeof item[field] === "string") { parts.push(item[field]); textFields.push(field); }
+    else if (item[field] != null) textGaps.push(`${field}: unsupported text value`);
+  }
+  const description = htmlToTextWithProvenance(textFields.length ? parts.join("\n") : undefined, descriptionLimit, textFields);
+  if (!description.text) throw new Error("Oracle: empty posting description");
+
+  // Every office has to reach the model: a posting qualifies on any one.
+  const locations: string[] = [];
+  const secondaryLocations: string[] = [];
+  const locationFields: string[] = [];
+  const locationGaps: string[] = [];
+  if (text(item.PrimaryLocation)) { locations.push(item.PrimaryLocation); locationFields.push("PrimaryLocation"); }
+  else locationGaps.push(`PrimaryLocation: ${item.PrimaryLocation == null ? "not supplied" : "unsupported location value"}`);
+  for (const [field, key] of [["secondaryLocations", "Name"], ["otherWorkLocations", "LocationName"]] as const) {
+    const value = item[field];
+    if (Array.isArray(value)) {
+      locationFields.push(field);
+      value.forEach((entry: any, index: number) => {
+        const name = entry && typeof entry === "object" ? text(entry[key]) : null;
+        if (name) { locations.push(name); secondaryLocations.push(name); }
+        else locationGaps.push(`${field}[${index}]: unsupported location value`);
+      });
+    } else if (value != null) locationGaps.push(`${field}: unsupported location collection`);
+  }
+  const workplaceType = text(item.WorkplaceType);
+  if (workplaceType) locationFields.push("WorkplaceType");
+  const workplaceCode = typeof item.WorkplaceTypeCode === "string" ? item.WorkplaceTypeCode.toUpperCase() : null;
+
+  // Pay sits in employer-defined fields; only ones labelled as pay count.
+  const pay: string[] = [];
+  const payFields: string[] = [];
+  if (Array.isArray(item.requisitionFlexFields)) {
+    item.requisitionFlexFields.forEach((flex: any, index: number) => {
+      if (flex && text(flex.Prompt) && /salary|\bpay\b|compensation|\bwages?\b/i.test(flex.Prompt) && text(flex.Value)) {
+        pay.push(`${flex.Prompt}: ${flex.Value}`);
+        payFields.push(`requisitionFlexFields[${index}]`);
+      }
+    });
+  }
+  const compensation = htmlToTextWithProvenance(pay.length ? pay.join("\n") : undefined, MAX_COMPENSATION_CHARS, payFields);
+
+  return {
+    id: `oracle:${ref.slug.toLowerCase()}:${item.Id}`,
+    company,
+    title: item.Title,
+    url: ref.url,
+    location: locations.join(" / ") || "unspecified",
+    locationMetadata: { workplaceType, secondaryLocations, coverageGaps: locationGaps, sourceFields: locationFields },
+    department: text(item.Category) ?? text(item.JobFunction) ?? "unspecified",
+    isRemote: workplaceCode === "ORA_REMOTE" ? true : workplaceCode === "ORA_HYBRID" || workplaceCode === "ORA_ON_SITE" ? false : null,
+    employmentType: text(item.JobSchedule),
+    postedAt: text(item.ExternalPostedStartDate),
+    compensation: compensation.text,
+    description: description.text,
+    contentProvenance: contentProvenance(description, compensation, textGaps),
   };
 }
 

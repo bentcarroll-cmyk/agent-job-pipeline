@@ -688,3 +688,94 @@ describe("matchesWorkdayRequisition", () => {
     expect(matchesWorkdayRequisition(url, requisition)).toBe(false);
   });
 });
+
+describe("fetchPosting — Oracle Recruiting Cloud", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const posting = "https://fixture-pod.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/fixture_careers/job/1001";
+  const detailUrl = "https://fixture-pod.fa.ocs.oraclecloud.com/hcmRestApi/resources/latest/" +
+    "recruitingCEJobRequisitionDetails?expand=all&onlyData=true&finder=ById;Id=%221001%22,siteNumber=fixture_careers";
+  const ref = { ats: "oracle" as const, slug: "fixture-pod", postingId: "1001", url: posting };
+  const item = (overrides: Record<string, unknown> = {}) => ({
+    Id: "1001", Title: "Regional Operations Manager",
+    Category: "Operations", JobFunction: "Business Operations", JobSchedule: "Full time",
+    ExternalPostedStartDate: "2026-01-05T13:00:00+00:00", PrimaryLocation: "Springfield, IL, United States",
+    WorkplaceTypeCode: "ORA_HYBRID", WorkplaceType: "Hybrid", secondaryLocations: [], otherWorkLocations: [],
+    ExternalDescriptionStr: "<p>Visa sponsorship is unavailable.</p>",
+    ExternalResponsibilitiesStr: "<ul><li>Lead regional operations planning.</li></ul>",
+    ExternalQualificationsStr: "<ul><li>8+ years of experience.</li></ul>",
+    CorporateDescriptionStr: "<p>About Fixture Employer.</p>",
+    requisitionFlexFields: [{ Prompt: "Pay Range", Value: "$90,000 - $110,000" }],
+    ...overrides,
+  });
+  const site = '<html><head><meta property="og:site_name" content="Fixture Employer"/></head></html>';
+  const stub = (detail: unknown, page: { ok: boolean; status: number; body: string } = { ok: true, status: 200, body: site }) => {
+    const mockFetch = vi.fn(async (url: string) => url === detailUrl
+      ? { ok: true, status: 200, json: async () => detail }
+      : { ok: page.ok, status: page.status, text: async () => page.body });
+    vi.stubGlobal("fetch", mockFetch);
+    return mockFetch;
+  };
+
+  it("fetches the posting from the candidate-experience API and names the employer from its site", async () => {
+    const mockFetch = stub({ items: [item()], count: 1, hasMore: false });
+
+    const job = await fetchPosting(ref, "Fixture Pod");
+
+    expect(mockFetch).toHaveBeenCalledWith(detailUrl, { redirect: "manual", signal: expect.any(AbortSignal) });
+    expect(mockFetch).toHaveBeenCalledWith(posting, { redirect: "manual", signal: expect.any(AbortSignal) });
+    expect(job).toMatchObject({
+      id: "oracle:fixture-pod:1001",
+      company: "Fixture Employer",
+      title: "Regional Operations Manager",
+      url: posting,
+      location: "Springfield, IL, United States",
+      department: "Operations",
+      isRemote: false,
+      locationMetadata: { workplaceType: "Hybrid", secondaryLocations: [], coverageGaps: [] },
+      employmentType: "Full time",
+      postedAt: "2026-01-05T13:00:00+00:00",
+      compensation: "Pay Range: $90,000 - $110,000",
+    });
+    for (const text of ["sponsorship is unavailable", "Lead regional operations", "8+ years", "About Fixture Employer"]) {
+      expect(job!.description).toContain(text);
+    }
+  });
+
+  it("lists every office a multi-location posting names", async () => {
+    stub({ items: [item({ secondaryLocations: [{ Name: "Columbus, OH, United States" }, { Id: 7 }] })], hasMore: false });
+    const job = await fetchPosting(ref, "Fixture");
+    expect(job).toMatchObject({
+      location: "Springfield, IL, United States / Columbus, OH, United States",
+      locationMetadata: { secondaryLocations: ["Columbus, OH, United States"],
+        coverageGaps: ["secondaryLocations[1]: unsupported location value"] },
+    });
+  });
+
+  it("reads remote and on-site arrangements from the workplace code", async () => {
+    stub({ items: [item({ WorkplaceTypeCode: "ORA_REMOTE", WorkplaceType: "Remote" })], hasMore: false });
+    expect((await fetchPosting(ref, "Fixture"))!.isRemote).toBe(true);
+    stub({ items: [item({ WorkplaceTypeCode: "ORA_ON_SITE", WorkplaceType: "On-site" })], hasMore: false });
+    expect((await fetchPosting(ref, "Fixture"))!.isRemote).toBe(false);
+    stub({ items: [item({ WorkplaceTypeCode: null, WorkplaceType: null })], hasMore: false });
+    expect((await fetchPosting(ref, "Fixture"))!.isRemote).toBeNull();
+  });
+
+  it("falls back to the site code when the site page cannot be read", async () => {
+    stub({ items: [item()], hasMore: false }, { ok: false, status: 503, body: "" });
+    expect((await fetchPosting(ref, "Fixture Pod"))!.company).toBe("Fixture Careers");
+  });
+
+  // Oracle answers 200 with no items for a closed or unknown job id.
+  it("reports a posting Oracle no longer returns as gone", async () => {
+    stub({ items: [], count: 0, hasMore: false });
+    expect(await fetchPosting(ref, "Fixture")).toBeNull();
+  });
+
+  it("refuses an answer for a different job", async () => {
+    stub({ items: [item({ Id: "1002" })], hasMore: false });
+    await expect(fetchPosting(ref, "Fixture")).rejects.toThrow(/identity/);
+  });
+});

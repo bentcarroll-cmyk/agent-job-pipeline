@@ -32,6 +32,17 @@ describe("shared employer URL resolver", () => {
     expect(calls).toBe(0);
   });
 
+  it("resolves an Oracle Recruiting Cloud link directly, without its tracking parameters", async () => {
+    let calls = 0;
+    const result = await resolvePostingUrl({ url: "https://fixture-pod.fa.ocs.oraclecloud.com/hcmUI/" +
+      "CandidateExperience/en/sites/fixture_careers/job/1001?bid=1&tid=x_0000&utm_medium=Unknown" }, {
+      registry: [], now: () => "2026-01-05T12:00:00Z", fetchPage: async () => { calls++; throw new Error("unexpected"); },
+    });
+    expect(result).toMatchObject({ kind: "resolved", posting: { kind: "ats", jobId: "oracle:fixture-pod:1001",
+      canonicalUrl: "https://fixture-pod.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/fixture_careers/job/1001" } });
+    expect(calls).toBe(0);
+  });
+
   it("holds an unknown employer URL without fetching it", async () => {
     let calls = 0;
     const result = await resolvePostingUrl({ url: "https://unknown.fixture.test/jobs/17" }, {

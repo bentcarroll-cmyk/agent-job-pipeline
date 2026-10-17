@@ -1,4 +1,5 @@
-import { isPostingIdentityConflict, normalizeAshby, normalizeGreenhouse, normalizeLever, normalizeWorkdayPosting,
+import { isPostingIdentityConflict, normalizeAshby, normalizeGreenhouse, normalizeLever, normalizeOraclePosting,
+  normalizeWorkdayPosting, oracleDetailUrl, oraclePostingItem, oracleSiteLabel, oracleSiteName,
   sameWorkdaySite, workdayDetailUrl, type NormalizedJob } from "../sources";
 import { jobRefId, parseJobUrl, titleCaseSlug, type JobRef } from "../unbounded/discovery";
 import { normalizeJobPosting } from "./jobposting";
@@ -6,6 +7,8 @@ import { SafeFetchError } from "./safe-fetch";
 import type { PostingFetchResult, ResolvedPosting, ResolverDependencies, SafePage } from "./types";
 
 const LIMITS = { maxRequests: 2, maxRedirects: 1, maxBytes: 1_048_576, timeoutMs: 15_000 };
+// Kept short so both Oracle requests fit inside the workflow's fetch step.
+const ORACLE_SITE_LIMITS = { maxRequests: 1, maxRedirects: 0, maxBytes: 1_048_576, timeoutMs: 5_000 };
 
 function held(reason: "blocked" | "transient" | "unsupported" | "invalid_identity" | "incomplete",
   detail: string, sourceUrl: string, httpStatus: number | null,
@@ -27,6 +30,7 @@ function endpoint(ref: JobRef): string | null {
   if (ref.ats === "greenhouse") return `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(ref.slug)}/jobs/${encodeURIComponent(ref.postingId)}`;
   if (ref.ats === "lever") return `https://api.lever.co/v0/postings/${encodeURIComponent(ref.slug)}/${encodeURIComponent(ref.postingId)}`;
   if (ref.ats === "ashby") return `https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(ref.slug)}?includeCompensation=true`;
+  if (ref.ats === "oracle") return oracleDetailUrl(ref.url);
   return workdayDetailUrl(ref.url);
 }
 
@@ -94,6 +98,29 @@ function atsJob(ref: JobRef, body: unknown, page: SafePage): PostingFetchResult 
   return { kind: "fetched", job: { ...job, id: jobRefId(ref) }, sourceUrl, fetchedAt: page.fetchedAt };
 }
 
+// Oracle's API answers the posting; the posting page only supplies the
+// employer's name, so failing to read it costs the name, not the posting.
+async function oracleJob(ref: JobRef, body: unknown, page: SafePage, deps: ResolverDependencies): Promise<PostingFetchResult> {
+  const sourceUrl = page.finalUrl;
+  let item: Record<string, unknown> | null;
+  try { item = oraclePostingItem(body, ref.postingId); }
+  catch (error) {
+    return held(isPostingIdentityConflict(error) ? "invalid_identity" : "incomplete",
+      "Oracle detail failed identity or completeness checks", sourceUrl, page.status);
+  }
+  if (!item) return { kind: "not_found", reason: "absent_complete_board", sourceUrl,
+    checkedAt: page.fetchedAt, httpStatus: page.status };
+  let company = oracleSiteLabel(ref.url);
+  try {
+    const site = await deps.fetchPage(ref.url, ORACLE_SITE_LIMITS);
+    if (site.status === 200 && site.finalUrl === ref.url) company = oracleSiteName(site.body) ?? company;
+  } catch { /* named by its site code instead */ }
+  let job: NormalizedJob;
+  try { job = normalizeOraclePosting(company, ref, item); }
+  catch { return held("incomplete", "Posting detail failed identity or completeness checks", sourceUrl, page.status); }
+  return { kind: "fetched", job: { ...job, id: jobRefId(ref) }, sourceUrl, fetchedAt: page.fetchedAt };
+}
+
 export async function fetchResolvedPosting(posting: ResolvedPosting,
   deps: ResolverDependencies): Promise<PostingFetchResult> {
   const sourceUrl = posting.kind === "employer" ? posting.canonicalUrl : endpoint(posting.ref);
@@ -132,5 +159,6 @@ export async function fetchResolvedPosting(posting: ResolvedPosting,
   let body: unknown;
   try { body = JSON.parse(page.body); }
   catch { return held("incomplete", "ATS detail is unreadable JSON", sourceUrl, page.status); }
+  if (posting.ref.ats === "oracle") return oracleJob(posting.ref, body, page, deps);
   return atsJob(posting.ref, body, page);
 }

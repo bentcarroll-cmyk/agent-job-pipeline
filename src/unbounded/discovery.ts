@@ -1,5 +1,5 @@
 import { fetchWithDeadline } from "../operations/fetch";
-export type AtsPlatform = "greenhouse" | "ashby" | "lever" | "workday";
+export type AtsPlatform = "greenhouse" | "ashby" | "lever" | "workday" | "oracle";
 
 const ATS_HOST_MAP: Record<string, AtsPlatform> = {
   "boards.greenhouse.io": "greenhouse",
@@ -31,6 +31,12 @@ const WORKDAY_LOCALE = /^[a-z]{2}-[a-z]{2}$/i;
 // .../job/Location/Role_REQ-123
 const WORKDAY_REQ_ID = /_([A-Za-z0-9][A-Za-z0-9-]*)$/;
 
+// Oracle Recruiting Cloud also gives every customer its own host —
+// {pod}.fa.{datacenter}.oraclecloud.com — with postings at
+// /hcmUI/CandidateExperience/{locale}/sites/{site}/job/{id}.
+const ORACLE_HOST = /^([a-z0-9][a-z0-9-]*)\.fa\.[a-z0-9-]+\.oraclecloud\.com$/i;
+const ORACLE_LOCALE = /^[a-z]{2}(?:-[a-z]{2})?$/i;
+
 export function parseJobUrl(url: string, title: string): JobRef | null {
   let parsed: URL;
   try {
@@ -41,6 +47,8 @@ export function parseJobUrl(url: string, title: string): JobRef | null {
   if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) return null;
   const workday = WORKDAY_HOST.exec(parsed.hostname);
   if (workday) return parseWorkdayUrl(parsed, workday[1], url, title);
+  const oracle = ORACLE_HOST.exec(parsed.hostname);
+  if (oracle) return parseOracleUrl(parsed, oracle[1], title);
 
   const ats = ATS_HOST_MAP[parsed.hostname];
   if (!ats) return null;
@@ -95,6 +103,30 @@ function parseWorkdayUrl(parsed: URL, tenant: string, url: string, title: string
   if (!requisition) return null;
 
   return { ats: "workday", slug: tenant.toLowerCase(), postingId: requisition[1].toLowerCase(), url, title };
+}
+
+// The pod is the identity: site codes are chosen per employer and many keep
+// Oracle's default "CX_1", while a job id is unique within its pod. The kept
+// URL is the plain posting page, without the tracking parameters shared links
+// carry, and a preview or application-form link reads as that page.
+function parseOracleUrl(parsed: URL, pod: string, title: string): JobRef | null {
+  let segments: string[];
+  try {
+    segments = parsed.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+  if (segments[0]?.toLowerCase() !== "hcmui" || segments[1]?.toLowerCase() !== "candidateexperience") return null;
+  const locale = segments[2];
+  if (!locale || !ORACLE_LOCALE.test(locale) || segments[3]?.toLowerCase() !== "sites") return null;
+  const site = segments[4];
+  if (!site || !/^[A-Za-z0-9_-]+$/.test(site)) return null;
+  const rest = segments.slice(5).map(segment => segment.toLowerCase());
+  const id = rest[0] === "job" ? segments[6]
+    : rest[0] === "requisitions" && rest[1] === "preview" ? segments[7] : undefined;
+  if (!id || !/^\d+$/.test(id)) return null;
+  const url = `${parsed.origin}/hcmUI/CandidateExperience/${locale}/sites/${site}/job/${id}`;
+  return { ats: "oracle", slug: pod.toLowerCase(), postingId: id, url, title };
 }
 
 export function jobRefId(ref: JobRef): string {

@@ -154,12 +154,27 @@ export async function staleQuestionCount(db: D1Database, announcedBefore: string
   return row?.n ?? 0;
 }
 
+// An application's rounds. A round's invitation time is its email's, when the
+// tracker recorded it.
 export async function roundsFor(db: D1Database, ownerTable: string, ownerId: string): Promise<ExistingRound[]> {
   const { results } = await db
-    .prepare("SELECT id, round, gmail_thread_id AS gmailThreadId FROM interview_rounds WHERE owner_table = ? AND owner_id = ?")
+    .prepare(
+      "SELECT r.id, r.round, r.stage, r.scheduled_for AS scheduledFor, COALESCE((SELECT x.received_at FROM lifecycle_receipts x WHERE x.gmail_message_id = r.gmail_message_id), r.invited_at) AS invitedAt, r.gmail_thread_id AS gmailThreadId FROM interview_rounds r WHERE r.owner_table = ? AND r.owner_id = ?",
+    )
     .bind(ownerTable, ownerId)
     .all<ExistingRound>();
   return results;
+}
+
+// The applications a thread's earlier emails were recorded against.
+export async function threadOwners(db: D1Database, threadId: string): Promise<string[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT owner_id AS ownerId FROM lifecycle_receipts WHERE gmail_thread_id = ?1 AND test = 0 AND owner_id IS NOT NULL AND decision IN ('applied', 'answered', 'unchanged', 'scheduled') UNION SELECT owner_id FROM interview_rounds WHERE gmail_thread_id = ?1",
+    )
+    .bind(threadId)
+    .all<{ ownerId: string }>();
+  return results.map((r) => r.ownerId);
 }
 
 export async function insertRound(
@@ -211,6 +226,18 @@ export async function scheduledRounds(db: D1Database): Promise<UpcomingRound[]> 
 
 export async function updateRoundSchedule(db: D1Database, id: number, scheduledFor: string, deferred?: D1PreparedStatement[]): Promise<void> {
   const statement = db.prepare("UPDATE interview_rounds SET scheduled_for = ? WHERE id = ?").bind(scheduledFor, id);
+  if (deferred) deferred.push(statement);
+  else await statement.run();
+}
+
+// Undo of a moved time: only while the round still has the time that email
+// gave it, so a later email's time is never thrown away.
+export async function restoreRoundSchedule(db: D1Database, id: number, from: string, to: string | null): Promise<void> {
+  await db.prepare("UPDATE interview_rounds SET scheduled_for = ? WHERE id = ? AND scheduled_for = ?").bind(to, id, from).run();
+}
+
+export async function updateRoundStage(db: D1Database, id: number, stage: string, deferred?: D1PreparedStatement[]): Promise<void> {
+  const statement = db.prepare("UPDATE interview_rounds SET stage = ? WHERE id = ?").bind(stage, id);
   if (deferred) deferred.push(statement);
   else await statement.run();
 }

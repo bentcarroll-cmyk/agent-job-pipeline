@@ -93,7 +93,9 @@ export class LifecycleWorkflow extends WorkflowEntrypoint<LifecycleEnv, {}> {
         const metadata = await step.do(`meta:${m.id}`, async () => {
           try {
             const msg = parseMessage(await getMessage(await getAccessToken(env), m.id, "metadata"));
-            const email: EmailMeta = { id: msg.id, threadId: msg.threadId, from: msg.from, subject: msg.subject, date: msg.date };
+            // Everything but the text, so no header-derived field is dropped.
+            const { text: _text, ...meta } = msg;
+            const email: EmailMeta = meta;
             return { ok: true as const, email };
           } catch (e) {
             if (e instanceof GmailAuthError) return { ok: false as const };

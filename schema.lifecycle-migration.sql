@@ -33,8 +33,9 @@ CREATE TABLE IF NOT EXISTS lifecycle_receipts (
 );
 CREATE INDEX IF NOT EXISTS idx_lifecycle_receipts_announced ON lifecycle_receipts(announced_at);
 
--- One row per interview invitation. The status stays 'interviewing'; this
--- records how far along it is.
+-- One row per interview conversation; conversations of the same step share
+-- its round number. The status stays 'interviewing'; this records how far
+-- along it is.
 CREATE TABLE IF NOT EXISTS interview_rounds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   owner_table TEXT NOT NULL,
